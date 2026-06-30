@@ -42,6 +42,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::InferenceTraceAttempt;
@@ -63,6 +64,7 @@ use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tracing::Event;
@@ -73,6 +75,7 @@ use tracing_subscriber::layer::Context as LayerContext;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_test::traced_test;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -585,6 +588,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        Instant::now(),
     );
 
     let observed = stream
@@ -635,6 +639,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
+        Instant::now(),
     );
 
     while stream.next().await.is_some() {}
@@ -648,6 +653,47 @@ async fn response_stream_records_last_model_feedback_ids() {
         tags.get("last_model_response_id").map(String::as_str),
         Some("\"resp-123\"")
     );
+}
+
+#[tokio::test]
+#[traced_test]
+async fn response_stream_completion_logs_ttft_after_first_output() {
+    let api_stream = futures::stream::iter([
+        Ok(ResponseEvent::OutputTextDelta("hi".to_string())),
+        Ok(ResponseEvent::Completed {
+            response_id: "resp-123".to_string(),
+            token_usage: Some(TokenUsage {
+                input_tokens: 3,
+                cached_input_tokens: 1,
+                output_tokens: 5,
+                reasoning_output_tokens: 2,
+                total_tokens: 9,
+            }),
+            end_turn: Some(true),
+        }),
+    ]);
+    let (mut stream, _) = super::map_response_events(
+        Some("req-123".to_string()),
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        test_model_provider(),
+        Instant::now(),
+    );
+
+    while stream.next().await.is_some() {}
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .any(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("event.kind=response.completed")
+                    && line.contains("ttft_ms=")
+            })
+            .then_some(())
+            .ok_or_else(|| "missing response.completed telemetry with ttft_ms".to_string())
+    });
 }
 
 #[tokio::test]
@@ -710,6 +756,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        Instant::now(),
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output

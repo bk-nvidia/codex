@@ -1411,6 +1411,7 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+            let request_start = Instant::now();
             let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
@@ -1420,6 +1421,7 @@ impl ModelClientSession {
                         request_session_telemetry,
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
+                        request_start,
                     );
                     return Ok(stream);
                 }
@@ -1599,6 +1601,7 @@ impl ModelClientSession {
                         "websocket connection is unavailable".to_string(),
                     ))
                 })?;
+            let request_start = Instant::now();
             let stream_result = websocket_connection
                 .stream_request(
                     ws_request,
@@ -1622,6 +1625,7 @@ impl ModelClientSession {
                 request_session_telemetry,
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
+                request_start,
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -1871,6 +1875,7 @@ fn map_response_stream(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    request_start: Instant,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -1886,6 +1891,7 @@ fn map_response_stream(
         session_telemetry,
         inference_trace_attempt,
         provider,
+        request_start,
     )
 }
 
@@ -1895,6 +1901,7 @@ fn map_response_events<S>(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    request_start: Instant,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1914,6 +1921,7 @@ where
         let mut items_added: Vec<ResponseItem> = Vec::new();
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
+        let mut ttft_ms: Option<i64> = None;
         if let Some(upstream_request_id) = upstream_request_id {
             feedback_tags!(last_model_request_id = upstream_request_id);
         }
@@ -1961,6 +1969,7 @@ where
                             Some(usage.cached_input_tokens),
                             Some(usage.reasoning_output_tokens),
                             usage.total_tokens,
+                            ttft_ms,
                         );
                     }
                     inference_trace_attempt.record_completed(
@@ -1988,6 +1997,11 @@ where
                     }
                 }
                 Ok(event) => {
+                    if ttft_ms.is_none() && response_event_indicates_generation_started(&event) {
+                        ttft_ms = Some(
+                            i64::try_from(request_start.elapsed().as_millis()).unwrap_or(i64::MAX),
+                        );
+                    }
                     if tx_event.send(Ok(event)).await.is_err() {
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,
@@ -2034,6 +2048,17 @@ where
             consumer_dropped: consumer_dropped_for_stream,
         },
         rx_last_response,
+    )
+}
+
+fn response_event_indicates_generation_started(event: &ResponseEvent) -> bool {
+    matches!(
+        event,
+        ResponseEvent::OutputItemAdded(_)
+            | ResponseEvent::OutputTextDelta(_)
+            | ResponseEvent::ToolCallInputDelta { .. }
+            | ResponseEvent::ReasoningSummaryDelta { .. }
+            | ResponseEvent::ReasoningContentDelta { .. }
     )
 }
 
