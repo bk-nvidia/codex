@@ -218,6 +218,7 @@ impl ResponsesWebsocketConnection {
         request: ResponsesWsRequest,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
+        telemetry_request_id: Option<String>,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -266,6 +267,7 @@ impl ResponsesWebsocketConnection {
                         telemetry,
                         connection_reused,
                         turn_state.as_deref(),
+                        telemetry_request_id,
                     )
                     .await
                 };
@@ -634,8 +636,10 @@ async fn run_websocket_response_stream(
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
     turn_state: Option<&OnceLock<String>>,
+    telemetry_request_id: Option<String>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut response_id: Option<String> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
     send_websocket_request(
         ws_stream,
@@ -643,6 +647,7 @@ async fn run_websocket_response_stream(
         idle_timeout,
         telemetry.as_ref(),
         connection_reused,
+        telemetry_request_id.as_deref(),
     )
     .await?;
 
@@ -652,7 +657,12 @@ async fn run_websocket_response_stream(
             .await
             .map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()));
         if let Some(t) = telemetry.as_ref() {
-            t.on_ws_event(&response, poll_start.elapsed());
+            t.on_ws_event(
+                &response,
+                poll_start.elapsed(),
+                telemetry_request_id.as_deref(),
+                response_id.as_deref(),
+            );
         }
         let message = match response {
             Ok(Some(Ok(msg))) => msg,
@@ -685,6 +695,9 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                if let Some(event_response_id) = event.response_id() {
+                    response_id = Some(event_response_id.to_string());
+                }
                 if let Some(response_turn_state) = event.turn_state()
                     && let Some(turn_state) = turn_state
                 {
@@ -781,6 +794,7 @@ async fn send_websocket_request(
     idle_timeout: Duration,
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
+    request_id: Option<&str>,
 ) -> Result<(), ApiError> {
     trace!("websocket request: {request_text}");
 
@@ -800,6 +814,7 @@ async fn send_websocket_request(
             request_start.elapsed(),
             result.as_ref().err(),
             connection_reused,
+            request_id,
         );
     }
 

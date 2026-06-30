@@ -103,6 +103,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::attestation::AttestationContext;
 use crate::attestation::AttestationProvider;
@@ -1604,6 +1605,7 @@ impl ModelClientSession {
                     ws_request,
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
+                    Some(Uuid::new_v4().to_string()),
                 )
                 .await
                 .map_err(|err| {
@@ -2334,7 +2336,13 @@ impl SseTelemetry for ApiTelemetry {
 }
 
 impl WebsocketTelemetry for ApiTelemetry {
-    fn on_ws_request(&self, duration: Duration, error: Option<&ApiError>, connection_reused: bool) {
+    fn on_ws_request(
+        &self,
+        duration: Duration,
+        error: Option<&ApiError>,
+        connection_reused: bool,
+        request_id: Option<&str>,
+    ) {
         let error_message = error.map(telemetry_api_error_message);
         let status = error.and_then(api_error_http_status);
         let debug = error
@@ -2344,6 +2352,7 @@ impl WebsocketTelemetry for ApiTelemetry {
             duration,
             error_message.as_deref(),
             connection_reused,
+            request_id,
             self.auth_context.agent_identity_telemetry(),
         );
         emit_feedback_request_tags_with_auth_env(
@@ -2378,9 +2387,11 @@ impl WebsocketTelemetry for ApiTelemetry {
         &self,
         result: &std::result::Result<Option<std::result::Result<Message, Error>>, ApiError>,
         duration: Duration,
+        request_id: Option<&str>,
+        response_id: Option<&str>,
     ) {
         self.session_telemetry
-            .record_websocket_event(result, duration);
+            .record_websocket_event(result, duration, request_id, response_id);
     }
 }
 

@@ -651,6 +651,7 @@ impl SessionTelemetry {
         duration: Duration,
         error: Option<&str>,
         connection_reused: bool,
+        request_id: Option<&str>,
         agent_identity_telemetry: Option<&AgentIdentityTelemetry>,
     ) {
         let success_str = if error.is_none() { "true" } else { "false" };
@@ -671,6 +672,7 @@ impl SessionTelemetry {
                 duration_ms = %duration.as_millis(),
                 success = success_str,
                 error.message = error,
+                request.id = request_id,
                 auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
                 auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
                 auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
@@ -730,6 +732,8 @@ impl SessionTelemetry {
             ApiError,
         >,
         duration: Duration,
+        request_id: Option<&str>,
+        response_id: Option<&str>,
     ) {
         let mut kind = None;
         let mut success = true;
@@ -744,7 +748,11 @@ impl SessionTelemetry {
                                 .and_then(|value| value.as_str())
                                 .map(std::string::ToString::to_string);
                             if kind.as_deref() == Some(RESPONSES_WEBSOCKET_TIMING_KIND) {
-                                self.record_responses_websocket_timing_metrics(&value);
+                                self.record_responses_websocket_timing_metrics(
+                                    &value,
+                                    request_id,
+                                    response_id,
+                                );
                             }
                             if kind.as_deref() == Some("response.failed") {
                                 success = false;
@@ -1131,24 +1139,32 @@ impl SessionTelemetry {
         );
     }
 
-    fn record_responses_websocket_timing_metrics(&self, value: &serde_json::Value) {
+    fn record_responses_websocket_timing_metrics(
+        &self,
+        value: &serde_json::Value,
+        request_id: Option<&str>,
+        response_id: Option<&str>,
+    ) {
         let timing_metrics = value.get(RESPONSES_WEBSOCKET_TIMING_METRICS_FIELD);
 
         let overhead_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_OVERHEAD_FIELD));
-        if let Some(duration) = duration_from_ms_value(overhead_value) {
+        let overhead = duration_from_ms_value(overhead_value);
+        if let Some(duration) = overhead {
             self.record_duration(RESPONSES_API_OVERHEAD_DURATION_METRIC, duration, &[]);
         }
 
         let inference_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_INFERENCE_FIELD));
-        if let Some(duration) = duration_from_ms_value(inference_value) {
+        let inference = duration_from_ms_value(inference_value);
+        if let Some(duration) = inference {
             self.record_duration(RESPONSES_API_INFERENCE_TIME_DURATION_METRIC, duration, &[]);
         }
 
         let engine_iapi_ttft_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_IAPI_TTFT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_iapi_ttft_value) {
+        let engine_iapi_ttft = duration_from_ms_value(engine_iapi_ttft_value);
+        if let Some(duration) = engine_iapi_ttft {
             self.record_duration(
                 RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC,
                 duration,
@@ -1158,7 +1174,8 @@ impl SessionTelemetry {
 
         let engine_service_ttft_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_service_ttft_value) {
+        let engine_service_ttft = duration_from_ms_value(engine_service_ttft_value);
+        if let Some(duration) = engine_service_ttft {
             self.record_duration(
                 RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC,
                 duration,
@@ -1168,19 +1185,38 @@ impl SessionTelemetry {
 
         let engine_iapi_tbt_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_IAPI_TBT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_iapi_tbt_value) {
+        let engine_iapi_tbt = duration_from_ms_value(engine_iapi_tbt_value);
+        if let Some(duration) = engine_iapi_tbt {
             self.record_duration(RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC, duration, &[]);
         }
 
         let engine_service_tbt_value =
             timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_SERVICE_TBT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_service_tbt_value) {
+        let engine_service_tbt = duration_from_ms_value(engine_service_tbt_value);
+        if let Some(duration) = engine_service_tbt {
             self.record_duration(
                 RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC,
                 duration,
                 &[],
             );
         }
+
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.responses_api_timing",
+                request.id = request_id,
+                response.id = response_id,
+                responses_duration_excl_engine_and_client_tool_time_ms = overhead.map(|duration| duration.as_millis() as u64),
+                engine_service_total_ms = inference.map(|duration| duration.as_millis() as u64),
+                engine_iapi_ttft_total_ms = engine_iapi_ttft.map(|duration| duration.as_millis() as u64),
+                engine_service_ttft_total_ms = engine_service_ttft.map(|duration| duration.as_millis() as u64),
+                engine_iapi_tbt_across_engine_calls_ms = engine_iapi_tbt.map(|duration| duration.as_millis() as u64),
+                engine_service_tbt_across_engine_calls_ms = engine_service_tbt.map(|duration| duration.as_millis() as u64),
+            },
+            log: {},
+            trace: {},
+        );
     }
 
     fn responses_type(event: &ResponseEvent) -> String {

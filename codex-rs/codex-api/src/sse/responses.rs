@@ -177,6 +177,14 @@ impl ResponsesStreamEvent {
         &self.kind
     }
 
+    /// Returns the response identifier carried by a response lifecycle event.
+    pub(crate) fn response_id(&self) -> Option<&str> {
+        self.response
+            .as_ref()
+            .and_then(|response| response.get("id"))
+            .and_then(Value::as_str)
+    }
+
     /// Returns the effective model reported by the server, if present.
     ///
     /// Precedence:
@@ -1434,6 +1442,17 @@ mod tests {
             ev.response_model().as_deref(),
             Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
         );
+    }
+
+    #[test]
+    fn responses_stream_event_reads_response_id() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.created",
+            "response": { "id": "resp-123" }
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(ev.response_id(), Some("resp-123"));
     }
 
     #[test]
