@@ -910,6 +910,7 @@ impl SessionTelemetry {
         cached_token_count: Option<i64>,
         reasoning_token_count: Option<i64>,
         tool_token_count: i64,
+        ttft_ms: Option<i64>,
     ) {
         log_and_trace_event!(
             self,
@@ -921,6 +922,7 @@ impl SessionTelemetry {
                 cached_token_count = cached_token_count,
                 reasoning_token_count = reasoning_token_count,
                 tool_token_count = %tool_token_count,
+                ttft_ms = ttft_ms,
                 service_tier = self.metadata.service_tier.as_deref(),
                 model_reasoning_effort = self.metadata.model_reasoning_effort.as_deref(),
             },
@@ -1181,13 +1183,6 @@ impl SessionTelemetry {
                 &[],
             );
         }
-        log_event!(
-            self,
-            event.name = "codex.responses_api_timing",
-            engine_iapi_ttft_total_ms = engine_iapi_ttft_value.and_then(serde_json::Value::as_f64),
-            engine_service_ttft_total_ms =
-                engine_service_ttft_value.and_then(serde_json::Value::as_f64),
-        );
     }
 
     fn responses_type(event: &ResponseEvent) -> String {

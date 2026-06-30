@@ -1914,6 +1914,7 @@ where
         let mut items_added: Vec<ResponseItem> = Vec::new();
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
+        let (request_start, mut ttft_ms) = (Instant::now(), None);
         if let Some(upstream_request_id) = upstream_request_id {
             feedback_tags!(last_model_request_id = upstream_request_id);
         }
@@ -1961,6 +1962,7 @@ where
                             Some(usage.cached_input_tokens),
                             Some(usage.reasoning_output_tokens),
                             usage.total_tokens,
+                            ttft_ms,
                         );
                     }
                     inference_trace_attempt.record_completed(
@@ -1988,6 +1990,9 @@ where
                     }
                 }
                 Ok(event) => {
+                    if ttft_ms.is_none() && matches!(event, ResponseEvent::OutputItemAdded(_)) {
+                        ttft_ms = Some(request_start.elapsed().as_millis() as i64);
+                    }
                     if tx_event.send(Ok(event)).await.is_err() {
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,
