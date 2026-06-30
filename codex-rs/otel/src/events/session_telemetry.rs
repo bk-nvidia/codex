@@ -1181,6 +1181,13 @@ impl SessionTelemetry {
                 &[],
             );
         }
+        log_event!(
+            self,
+            event.name = "codex.responses_api_timing",
+            engine_iapi_ttft_total_ms = engine_iapi_ttft_value.and_then(serde_json::Value::as_f64),
+            engine_service_ttft_total_ms =
+                engine_service_ttft_value.and_then(serde_json::Value::as_f64),
+        );
     }
 
     fn responses_type(event: &ResponseEvent) -> String {
