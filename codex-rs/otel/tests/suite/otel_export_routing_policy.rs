@@ -853,7 +853,26 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
             std::time::Duration::from_millis(23),
             Some("stream error"),
             /*connection_reused*/ true,
+            Some("request-runtime-ws"),
             Some(&agent_identity_telemetry),
+        );
+        let timing_response: std::result::Result<
+            Option<
+                std::result::Result<
+                    tokio_tungstenite::tungstenite::Message,
+                    tokio_tungstenite::tungstenite::Error,
+                >,
+            >,
+            codex_api::ApiError,
+        > = Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(
+            r#"{"type":"responsesapi.websocket_timing","timing_metrics":{"responses_duration_excl_engine_and_client_tool_time_ms":124,"engine_service_total_ms":457,"engine_iapi_ttft_total_ms":211,"engine_service_ttft_total_ms":233,"engine_iapi_tbt_across_engine_calls_ms":377,"engine_service_tbt_across_engine_calls_ms":399}}"#
+                .into(),
+        ))));
+        manager.record_websocket_event(
+            &timing_response,
+            std::time::Duration::from_millis(20),
+            Some("request-runtime-ws"),
+            Some("response-runtime-ws"),
         );
     });
 
@@ -874,6 +893,10 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
         Some("stream error")
     );
     assert_eq!(
+        request_log_attrs.get("request.id").map(String::as_str),
+        Some("request-runtime-ws")
+    );
+    assert_eq!(
         request_log_attrs
             .get("auth.env_openai_api_key_present")
             .map(String::as_str),
@@ -887,6 +910,28 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
         request_log_attrs.get("auth.task_id").map(String::as_str),
         Some("task-run-ws-request")
     );
+    let timing_log = find_log_by_event_name(&logs, "codex.responses_api_timing");
+    let timing_log_attrs = log_attributes(&timing_log.record);
+    assert_eq!(
+        timing_log_attrs.get("request.id").map(String::as_str),
+        Some("request-runtime-ws")
+    );
+    assert_eq!(
+        timing_log_attrs.get("response.id").map(String::as_str),
+        Some("response-runtime-ws")
+    );
+    assert_eq!(
+        timing_log_attrs
+            .get("engine_iapi_ttft_total_ms")
+            .map(String::as_str),
+        Some("211")
+    );
+    assert_eq!(
+        timing_log_attrs
+            .get("engine_service_ttft_total_ms")
+            .map(String::as_str),
+        Some("233")
+    );
 
     let spans = span_exporter.get_finished_spans().expect("span export");
     let request_trace_event =
@@ -897,6 +942,10 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
             .get("auth.connection_reused")
             .map(String::as_str),
         Some("true")
+    );
+    assert_eq!(
+        request_trace_attrs.get("request.id").map(String::as_str),
+        Some("request-runtime-ws")
     );
     assert_eq!(
         request_trace_attrs
@@ -911,5 +960,16 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
     assert_eq!(
         request_trace_attrs.get("auth.task_id").map(String::as_str),
         Some("task-run-ws-request")
+    );
+    let timing_trace_event =
+        find_span_event_by_name_attr(&spans[0].events.events, "codex.responses_api_timing");
+    let timing_trace_attrs = span_event_attributes(timing_trace_event);
+    assert_eq!(
+        timing_trace_attrs.get("request.id").map(String::as_str),
+        Some("request-runtime-ws")
+    );
+    assert_eq!(
+        timing_trace_attrs.get("response.id").map(String::as_str),
+        Some("response-runtime-ws")
     );
 }
