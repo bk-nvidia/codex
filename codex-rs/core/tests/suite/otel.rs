@@ -161,6 +161,8 @@ async fn responses_api_emits_api_request_event() {
                     && line.contains("event.kind=response.completed")
                     && line.contains("service_tier=\"priority\"")
                     && line.contains("model_reasoning_effort=\"high\"")
+                    && extract_log_field(line, "response_id").as_deref() == Some("done")
+                    && extract_log_field(line, "request_id").is_none()
             })
             .map(|_| Ok(()))
             .unwrap_or_else(|| {
@@ -521,9 +523,9 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
 async fn process_sse_emits_completed_telemetry() {
     let server = start_mock_server().await;
 
-    mount_sse_once(
+    mount_response_once(
         &server,
-        sse(vec![
+        sse_response(sse(vec![
             ev_reasoning_item_added("reasoning-1", &[]),
             serde_json::json!({
                 "type": "response.completed",
@@ -541,7 +543,8 @@ async fn process_sse_emits_completed_telemetry() {
                     }
                 }
             }),
-        ]),
+        ]))
+        .insert_header("x-request-id", "req-inference-1"),
     )
     .await;
 
@@ -569,6 +572,8 @@ async fn process_sse_emits_completed_telemetry() {
                     && line.contains("cache_write_token_count=2")
                     && line.contains("reasoning_token_count=2")
                     && line.contains("tool_token_count=9")
+                    && extract_log_field(line, "response_id").as_deref() == Some("resp1")
+                    && extract_log_field(line, "request_id").as_deref() == Some("req-inference-1")
                     && extract_log_field(line, "ttft_ms")
                         .and_then(|ttft_ms| ttft_ms.parse::<i64>().ok())
                         .is_some()

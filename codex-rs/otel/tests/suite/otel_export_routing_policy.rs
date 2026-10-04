@@ -32,6 +32,7 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 
 fn log_attributes(record: &SdkLogRecord) -> BTreeMap<String, String> {
@@ -97,6 +98,83 @@ fn auth_env_metadata() -> AuthEnvTelemetryMetadata {
         provider_env_key_name: Some("configured".to_string()),
         provider_env_key_present: Some(true),
         refresh_token_url_override_present: true,
+    }
+}
+
+#[test]
+fn otel_export_routing_policy_routes_inference_identifiers() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer_provider.tracer("inference-identifiers-test"))
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+    let identifiers = [
+        ("resp-http", Some("req-http")),
+        ("resp-websocket-1", None),
+        ("resp-websocket-2", None),
+    ];
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-test",
+            "gpt-test",
+            /*account_id*/ None,
+            /*account_email*/ None,
+            Some(TelemetryAuthMode::ApiKey),
+            "codex_exec".to_string(),
+            /*log_user_prompts*/ false,
+            "tty".to_string(),
+            SessionSource::Cli,
+        );
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        for (response_id, request_id) in identifiers {
+            manager.sse_event_completed(
+                &TokenUsage::default(),
+                /*ttft_ms*/ Some(12),
+                response_id,
+                request_id,
+            );
+        }
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    let log_events: Vec<_> = logs.iter().map(|log| log_attributes(&log.record)).collect();
+    let trace_events: Vec<_> = spans
+        .iter()
+        .flat_map(|span| &span.events.events)
+        .map(span_event_attributes)
+        .collect();
+
+    for events in [&log_events, &trace_events] {
+        assert_eq!(events.len(), identifiers.len());
+        for (attrs, (response_id, request_id)) in events.iter().zip(identifiers) {
+            assert_eq!(attrs["event.name"], "codex.sse_event");
+            assert_eq!(attrs["event.kind"], "response.completed");
+            assert_eq!(attrs["response_id"], response_id);
+            assert_eq!(attrs.get("request_id").map(String::as_str), request_id);
+            assert_eq!(attrs["ttft_ms"], "12");
+        }
     }
 }
 

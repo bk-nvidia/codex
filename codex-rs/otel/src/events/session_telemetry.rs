@@ -1101,12 +1101,25 @@ impl SessionTelemetry {
         );
     }
 
-    pub fn sse_event_completed(&self, usage: &TokenUsage, ttft_ms: Option<i64>) {
+    /// Emits response identifiers, token usage, and timing for a completed inference.
+    ///
+    /// `request_id` is the upstream HTTP request ID when available. WebSocket
+    /// responses carry their own `response_id`; a connection ID must not be used
+    /// as a per-inference request ID.
+    pub fn sse_event_completed(
+        &self,
+        usage: &TokenUsage,
+        ttft_ms: Option<i64>,
+        response_id: &str,
+        request_id: Option<&str>,
+    ) {
         log_and_trace_event!(
             self,
             common: {
                 event.name = "codex.sse_event",
                 event.kind = %"response.completed",
+                response_id = response_id,
+                request_id = request_id,
                 input_token_count = %usage.input_tokens,
                 output_token_count = %usage.output_tokens,
                 cached_token_count = usage.cached_input_tokens,

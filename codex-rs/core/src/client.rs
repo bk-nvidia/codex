@@ -2445,7 +2445,12 @@ where
                 }) => {
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
-                        session_telemetry.sse_event_completed(usage, ttft_ms);
+                        session_telemetry.sse_event_completed(
+                            usage,
+                            ttft_ms,
+                            &response_id,
+                            upstream_request_id,
+                        );
                     }
                     inference_trace_attempt.record_completed(
                         &response_id,
