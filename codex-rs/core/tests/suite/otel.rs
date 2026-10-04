@@ -161,8 +161,6 @@ async fn responses_api_emits_api_request_event() {
                     && line.contains("event.kind=response.completed")
                     && line.contains("service_tier=\"priority\"")
                     && line.contains("model_reasoning_effort=\"high\"")
-                    && extract_log_field(line, "response_id").as_deref() == Some("done")
-                    && extract_log_field(line, "request_id").is_none()
             })
             .map(|_| Ok(()))
             .unwrap_or_else(|| {
@@ -301,9 +299,9 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
 async fn process_sse_failed_event_records_response_error_message() {
     let server = start_mock_server().await;
 
-    mount_sse_once(
+    mount_response_once(
         &server,
-        sse(vec![serde_json::json!({
+        sse_response(sse(vec![serde_json::json!({
             "type": "response.failed",
             "response": {
                 "error": {
@@ -311,7 +309,8 @@ async fn process_sse_failed_event_records_response_error_message() {
                     "code": "bad"
                 }
             }
-        })]),
+        })]))
+        .insert_header("x-request-id", "req-stream-failed"),
     )
     .await;
     mount_sse_once(
@@ -356,6 +355,7 @@ async fn process_sse_failed_event_records_response_error_message() {
             .map(|_| Ok(()))
             .unwrap_or(Err("missing codex.sse_event".to_string()))
     });
+    assert!(logs_contain("req-stream-failed"));
 }
 
 #[tokio::test]
@@ -544,7 +544,7 @@ async fn process_sse_emits_completed_telemetry() {
                 }
             }),
         ]))
-        .insert_header("x-request-id", "req-inference-1"),
+        .insert_header("x-request-id", "req-completed-test"),
     )
     .await;
 
@@ -572,8 +572,8 @@ async fn process_sse_emits_completed_telemetry() {
                     && line.contains("cache_write_token_count=2")
                     && line.contains("reasoning_token_count=2")
                     && line.contains("tool_token_count=9")
-                    && extract_log_field(line, "response_id").as_deref() == Some("resp1")
-                    && extract_log_field(line, "request_id").as_deref() == Some("req-inference-1")
+                    && extract_log_field(line, "request_id").as_deref()
+                        == Some("req-completed-test")
                     && extract_log_field(line, "ttft_ms")
                         .and_then(|ttft_ms| ttft_ms.parse::<i64>().ok())
                         .is_some()

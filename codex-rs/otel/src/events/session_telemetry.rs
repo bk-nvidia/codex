@@ -944,6 +944,24 @@ impl SessionTelemetry {
                             if kind.as_deref() == Some(RESPONSES_WEBSOCKET_TIMING_KIND) {
                                 self.record_responses_websocket_timing_metrics(&value);
                             }
+                            if let Some(request_id) = value
+                                .get("headers")
+                                .and_then(serde_json::Value::as_object)
+                                .and_then(|headers| {
+                                    headers.iter().find_map(|(key, value)| {
+                                        key.eq_ignore_ascii_case("x-request-id")
+                                            .then(|| value.as_str())
+                                            .flatten()
+                                    })
+                                })
+                            {
+                                log_event!(
+                                    self,
+                                    event.name = "codex.websocket_event",
+                                    event.kind = kind.as_deref(),
+                                    request_id = request_id,
+                                );
+                            }
                             if kind.as_deref() == Some("response.failed") {
                                 success = false;
                             }
@@ -1085,7 +1103,7 @@ impl SessionTelemetry {
         );
     }
 
-    pub fn see_event_completed_failed<T>(&self, error: &T)
+    pub fn see_event_completed_failed<T>(&self, error: &T, request_id: Option<&str>)
     where
         T: std::fmt::Display,
     {
@@ -1094,6 +1112,7 @@ impl SessionTelemetry {
             common: {
                 event.name = "codex.sse_event",
                 event.kind = %"response.completed",
+                request_id = request_id,
                 error.message = %error,
             },
             log: {},
@@ -1101,16 +1120,10 @@ impl SessionTelemetry {
         );
     }
 
-    /// Emits response identifiers, token usage, and timing for a completed inference.
-    ///
-    /// `request_id` is the upstream HTTP request ID when available. WebSocket
-    /// responses carry their own `response_id`; a connection ID must not be used
-    /// as a per-inference request ID.
     pub fn sse_event_completed(
         &self,
         usage: &TokenUsage,
         ttft_ms: Option<i64>,
-        response_id: &str,
         request_id: Option<&str>,
     ) {
         log_and_trace_event!(
@@ -1118,7 +1131,6 @@ impl SessionTelemetry {
             common: {
                 event.name = "codex.sse_event",
                 event.kind = %"response.completed",
-                response_id = response_id,
                 request_id = request_id,
                 input_token_count = %usage.input_tokens,
                 output_token_count = %usage.output_tokens,

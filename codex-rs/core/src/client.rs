@@ -2445,12 +2445,7 @@ where
                 }) => {
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
-                        session_telemetry.sse_event_completed(
-                            usage,
-                            ttft_ms,
-                            &response_id,
-                            upstream_request_id,
-                        );
+                        session_telemetry.sse_event_completed(usage, ttft_ms, upstream_request_id);
                     }
                     inference_trace_attempt.record_completed(
                         &response_id,
@@ -2507,7 +2502,7 @@ where
                         &items_added,
                     );
                     if !logged_error {
-                        session_telemetry.see_event_completed_failed(&mapped);
+                        session_telemetry.see_event_completed_failed(&mapped, upstream_request_id);
                         logged_error = true;
                     }
                     if tx_event.send(Err(mapped)).await.is_err() {
