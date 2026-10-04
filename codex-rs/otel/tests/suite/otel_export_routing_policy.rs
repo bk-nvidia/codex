@@ -1068,12 +1068,26 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
             /*connection_reused*/ true,
             Some(&agent_identity_telemetry),
         );
+        manager.record_websocket_event(
+            &Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(
+                r#"{"type":"codex.response.metadata","headers":{"X-Request-ID":"req-ws-test"}}"#
+                    .into(),
+            )))),
+            std::time::Duration::from_millis(1),
+        );
     });
 
     logger_provider.force_flush().expect("flush logs");
     tracer_provider.force_flush().expect("flush traces");
 
     let logs = log_exporter.get_emitted_logs().expect("log export");
+    let metadata_log = find_log_by_event_name(&logs, "codex.websocket_event");
+    assert_eq!(
+        log_attributes(&metadata_log.record)
+            .get("request_id")
+            .map(String::as_str),
+        Some("req-ws-test")
+    );
     let request_log = find_log_by_event_name(&logs, "codex.websocket_request");
     let request_log_attrs = log_attributes(&request_log.record);
     assert_eq!(
